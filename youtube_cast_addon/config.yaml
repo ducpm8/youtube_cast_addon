@@ -16,4 +16,7 @@ hassio_role: manager
 hassio_api: true
 homeassistant_api: true
 
-
+# Pre-built multi-arch images published to ghcr.io by .github/workflows/publish.yml
+# Each version bump triggers a rebuild + push. HA pulls instead of building
+# locally — critical on weak hosts (Pi 3 / 1GB) where pip install would OOM.
+image: "ghcr.io/ducpm8/youtube_cast_addon-{arch}"

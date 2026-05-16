@@ -1,0 +1,74 @@
+name: Publish addon images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'youtube_cast_addon/**'
+      - '.github/workflows/publish.yml'
+  workflow_dispatch:
+    inputs:
+      version_override:
+        description: 'Force build even if version unchanged'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, aarch64, armhf, armv7]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read addon metadata
+        id: addon
+        run: |
+          version=$(grep '^version:' youtube_cast_addon/config.yaml | head -1 | awk '{print $2}' | tr -d '"')
+          slug=$(grep '^slug:'    youtube_cast_addon/config.yaml | head -1 | awk '{print $2}' | tr -d '"')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "slug=$slug"       >> "$GITHUB_OUTPUT"
+          echo "Building $slug version $version for ${{ matrix.arch }}"
+
+      - name: Check if image already published
+        id: existing
+        run: |
+          tag="${{ steps.addon.outputs.version }}"
+          image="ghcr.io/${{ github.repository_owner }}/${{ steps.addon.outputs.slug }}-${{ matrix.arch }}"
+          if docker manifest inspect "$image:$tag" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Already published: $image:$tag"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up QEMU
+        if: steps.existing.outputs.skip == 'false' || inputs.version_override == true
+        uses: docker/setup-qemu-action@v3
+
+      - name: Login to GHCR
+        if: steps.existing.outputs.skip == 'false' || inputs.version_override == true
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.arch }}
+        if: steps.existing.outputs.skip == 'false' || inputs.version_override == true
+        uses: home-assistant/builder@2024.08.2
+        with:
+          args: |
+            --${{ matrix.arch }}
+            --target youtube_cast_addon
+            --image "ghcr.io/${{ github.repository_owner }}/${{ steps.addon.outputs.slug }}-{arch}"
+            --docker-hub "ghcr.io/${{ github.repository_owner }}"
+            --addon

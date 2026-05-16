@@ -16,4 +16,14 @@ Then install **YouTube Music Cinematic** from the store.
 
 ## Source
 
-Forked + extracted from `ghcr.io/trankhanhduy2929-beep/youtube_cast_addon-amd64`. HA builds locally from `Dockerfile` (no upstream image dependency).
+Forked + extracted from `ghcr.io/trankhanhduy2929-beep/youtube_cast_addon-amd64`, then perf-tuned for weak HA hosts (Pi 3 / 1GB / SD card).
+
+## Image publishing
+
+Multi-arch images (amd64, aarch64, armhf, armv7) built by GitHub Actions on every push to `main` and published to:
+
+```
+ghcr.io/ducpm8/youtube_cast_addon-{arch}
+```
+
+HA pulls the matching arch tag (== addon `version:` in `config.yaml`). `build.yaml` + `Dockerfile` remain as fallback in case the image is unavailable.
