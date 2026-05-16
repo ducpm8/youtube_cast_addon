@@ -1,0 +1,375 @@
+
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>YouTube Music Pro Ultimate</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="static/style.css">
+
+</head>
+<body class="safe-area-top">
+    <div id="toastBox" class="toast-box"></div>
+
+    <!-- Header -->
+    <header class="glass-nav px-4 pt-4 pb-1 space-y-3">
+        <div class="flex justify-between items-center">
+            <div class="flex items-center gap-2">
+                <div class="w-8 h-8 bg-red-600 rounded-lg icon-center">
+                    <svg width="18" height="18" fill="white" viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+                </div>
+                <h1 class="text-base font-extrabold tracking-tighter uppercase">Music <span class="text-red-600">Ultra</span></h1>
+            </div>
+            <div class="flex items-center gap-2">
+                <button onclick="openDebugPanel()" class="p-2 bg-zinc-500/10 rounded-full text-zinc-500" title="Debug">
+                    <svg width="14" height="14" fill="currentColor" viewBox="0 0 24 24"><path d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/></svg>
+                </button>
+                <button onclick="toggleTheme()" class="p-2 bg-zinc-500/10 rounded-full"><svg id="themeIcon" width="14" height="14" fill="currentColor" viewBox="0 0 24 24"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9c0-.46-.04-.92-.1-1.36-.98 1.37-2.58 2.26-4.4 2.26-2.98 0-5.4-2.42-5.4-5.4 0-1.81.89-3.42 2.26-4.4-.44-.06-.9-.1-1.36-.1z"/></svg></button>
+                <select id="speakerList" class="bg-zinc-500/10 text-[9px] font-black p-1.5 rounded-lg outline-none max-w-[110px] appearance-none" style="color: var(--text)" onchange="selectDevice(this.value)">
+                    <option value="browser">📱 ĐIỆN THOẠI</option>
+                </select>
+            </div>
+        </div>
+        <div class="relative search-wrap">
+            <input type="text" id="searchInput" placeholder="Tìm kiếm bài hát, clip..." class="w-full bg-zinc-500/10 rounded-xl px-4 py-2 text-xs font-semibold outline-none border border-white/5" style="color: var(--text)">
+            <button onclick="performNewSearch()" class="absolute right-1.5 top-1 bg-red-600 text-white px-3 py-1 rounded-lg text-[9px] font-black uppercase">TÌM</button>
+        </div>
+        <div class="quick-status" id="quickStatusBar">
+            <div class="quick-pill" id="qsDevice">📱 Điện thoại</div>
+            <div class="quick-pill" id="qsMode">🎵 Bài hát</div>
+            <div class="quick-pill" id="qsState">⏸️ Sẵn sàng</div>
+        </div>
+        <div class="flex gap-6 border-b border-zinc-500/10 overflow-x-auto no-scrollbar pt-1">
+            <button onclick="switchTab('home')" id="tab-home" class="tab-btn active uppercase">Khám phá</button>
+            <button onclick="switchTab('playlist')" id="tab-playlist" class="tab-btn uppercase">Playlist</button>
+            <button onclick="switchTab('schedule')" id="tab-schedule" class="tab-btn uppercase">Lịch phát</button>
+        </div>
+    </header>
+
+    <!-- Main Scroll Content -->
+    <main id="mainScroll" class="flex-grow overflow-y-auto no-scrollbar px-4 pt-2">
+        <div id="section-home" class="tab-section grid grid-cols-2 sm:grid-cols-4 gap-3"></div>
+        <div id="sentinel" class="w-full h-12 flex items-center justify-center">
+            <div id="bottomLoader" class="hidden w-4 h-4 border-2 border-red-600 border-t-transparent rounded-full animate-spin"></div>
+        </div>
+        <div id="section-playlist" class="tab-section hidden space-y-3">
+            <div class="flex gap-2">
+                <input type="text" id="newPlName" placeholder="Tên Playlist..." class="flex-grow bg-zinc-500/10 rounded-xl px-4 py-2 text-xs outline-none border border-white/5" style="color: var(--text)">
+                <button onclick="createPlaylist()" class="bg-red-600 text-white px-5 rounded-xl font-black">+</button>
+            </div>
+            <div id="plList" class="grid gap-2"></div>
+        </div>
+        <div id="section-schedule" class="tab-section hidden space-y-4 pb-24 schedule-block">
+            <div id="section-timer" class="space-y-4">
+            <div class="schedule-section-head">
+                <div>
+                    <div class="schedule-kicker">Lịch phát</div>
+                    <h2 class="schedule-title">Hẹn giờ nhanh</h2>
+                </div>
+                <div class="schedule-note">Tạo lịch phát hoặc lịch tắt cơ bản</div>
+            </div>
+            <div class="glass-card p-4 space-y-4">
+                <div class="flex justify-between items-center">
+                    <h3 id="timerActionTitle" class="text-[10px] font-black uppercase text-red-600 tracking-widest">Thiết lập hẹn giờ</h3>
+                    <input type="hidden" id="editTimerId">
+                </div>
+                <div class="flex justify-between gap-1">
+                    <button onclick="toggleDay(this, 0)" class="day-btn" data-day="0">T2</button>
+                    <button onclick="toggleDay(this, 1)" class="day-btn" data-day="1">T3</button>
+                    <button onclick="toggleDay(this, 2)" class="day-btn" data-day="2">T4</button>
+                    <button onclick="toggleDay(this, 3)" class="day-btn" data-day="3">T5</button>
+                    <button onclick="toggleDay(this, 4)" class="day-btn" data-day="4">T6</button>
+                    <button onclick="toggleDay(this, 5)" class="day-btn" data-day="5">T7</button>
+                    <button onclick="toggleDay(this, 6)" class="day-btn" data-day="6">CN</button>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <input type="time" id="tTime" class="bg-zinc-500/10 p-2.5 rounded-xl text-xs font-bold" style="color: var(--text)">
+                    <select id="tSpeaker" class="bg-zinc-500/10 p-2.5 rounded-xl text-xs font-bold" style="color: var(--text)"></select>
+                </div>
+                <div class="grid grid-cols-2 gap-3 items-center">
+                    <select id="tType" onchange="toggleTimerFields()" class="bg-zinc-500/10 p-2.5 rounded-xl text-xs font-bold" style="color: var(--text)">
+                        <option value="play">PHÁT</option><option value="stop">TẮT</option>
+                    </select>
+                    <div class="flex gap-2 items-center" id="tDurationContainer">
+                        <input type="number" id="tDuration" placeholder="Phút" class="w-1/2 bg-zinc-500/10 p-2.5 rounded-xl text-xs font-bold" style="color: var(--text)">
+                        <button onclick="toggleTimerRandom()" id="tRandomBtn" class="random-btn flex-grow">NGẪU NHIÊN</button>
+                    </div>
+                </div>
+                <select id="tPlaylist" class="w-full bg-zinc-500/10 p-2.5 rounded-xl text-xs font-bold" style="color: var(--text)"></select>
+                <div class="flex gap-2">
+                    <button onclick="saveTimer()" class="flex-grow bg-red-600 text-white py-3 rounded-xl font-black text-[10px] uppercase">LƯU HẸN GIỜ</button>
+                    <button id="cancelEditBtn" onclick="resetTimerForm()" class="hidden bg-zinc-500/10 px-5 rounded-xl text-[9px] font-black uppercase">HỦY</button>
+                </div>
+            </div>
+            <div id="timerDisplay" class="grid gap-2"></div>
+        </div>
+        <div id="section-advanced" class="space-y-4">
+            <div class="schedule-section-head">
+                <div>
+                    <div class="schedule-kicker">Lịch phát</div>
+                    <h2 class="schedule-title">Lịch nâng cao</h2>
+                </div>
+                <div class="schedule-note">Tên lịch, loa, playlist và ngày chạy</div>
+            </div>
+            <div class="glass-card p-4 space-y-4">
+                <div class="text-[10px] font-black uppercase text-red-600 tracking-widest flex items-center justify-between gap-2">
+                    <span id="advFormTitle">Lịch phát nâng cao</span>
+                    <input type="hidden" id="advEditId">
+                    <button id="advCancelBtn" onclick="resetAdvancedScheduleForm()" class="hidden text-[9px] font-black text-zinc-500 uppercase">Hủy sửa</button>
+                </div>
+                <input id="advName" placeholder="Tên lịch / ví dụ: Sáng phòng khách" class="w-full bg-zinc-500/10 p-2.5 rounded-xl text-xs font-bold outline-none" style="color: var(--text)">
+                <div class="flex justify-between gap-1" id="advDays">
+                    <button onclick="toggleAdvDay(this,0)" class="day-btn" data-day="0">T2</button>
+                    <button onclick="toggleAdvDay(this,1)" class="day-btn" data-day="1">T3</button>
+                    <button onclick="toggleAdvDay(this,2)" class="day-btn" data-day="2">T4</button>
+                    <button onclick="toggleAdvDay(this,3)" class="day-btn" data-day="3">T5</button>
+                    <button onclick="toggleAdvDay(this,4)" class="day-btn" data-day="4">T6</button>
+                    <button onclick="toggleAdvDay(this,5)" class="day-btn" data-day="5">T7</button>
+                    <button onclick="toggleAdvDay(this,6)" class="day-btn" data-day="6">CN</button>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <input type="time" id="advAt" class="bg-zinc-500/10 p-2.5 rounded-xl text-xs font-bold" style="color: var(--text)">
+                    <select id="advSpeaker" class="bg-zinc-500/10 p-2.5 rounded-xl text-xs font-bold" style="color: var(--text)"></select>
+                </div>
+                <select id="advPlaylist" class="w-full bg-zinc-500/10 p-2.5 rounded-xl text-xs font-bold" style="color: var(--text)"></select>
+                <button onclick="saveAdvancedSchedule(this)" class="w-full bg-red-600 text-white py-3 rounded-xl font-black text-[10px] uppercase">LƯU LỊCH NÂNG CAO</button>
+            </div>
+            <div id="advancedScheduleList" class="grid gap-2"></div>
+        </div>
+        </div>
+    </main>
+
+    <!-- Mini Player -->
+    <div id="miniPlayer" onclick="openFullPlayer()" class="hidden fixed bottom-5 left-3 right-3 p-2.5 rounded-[22px] flex items-center gap-3 shadow-2xl border border-white/5 cursor-pointer z-50 transition-colors touch-surface" style="background: var(--modal-bg); border-color: var(--border)">
+        <img id="mThumb" class="w-10 h-10 rounded-xl object-cover bg-zinc-800">
+        <div class="flex-grow min-w-0">
+            <div id="mTitle" class="text-[12px] font-bold truncate" style="color: var(--text)">...</div>
+            <div class="flex gap-1 h-3 mt-1 opacity-40">
+                <div class="wave-bar"></div><div class="wave-bar" style="animation-delay:0.2s"></div><div class="wave-bar" style="animation-delay:0.4s"></div>
+            </div>
+        </div>
+        <button onclick="event.stopPropagation(); togglePlay()" class="w-10 h-10 bg-white text-black rounded-full icon-center shadow-lg active:scale-90">
+            <svg id="mPlayIcon" width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+    </div>
+
+    <!-- Full Player -->
+    <div id="fullPlayer" class="touch-surface">
+        <div id="ambientBg">
+            <div class="blob blob-1"></div><div class="blob blob-2"></div><div class="blob blob-3"></div><div class="dark-overlay"></div>
+        </div>
+
+        <div class="flex justify-between items-center mb-4">
+            <button onclick="closeFullPlayer()" class="p-2.5 bg-zinc-500/10 rounded-full" style="color: var(--text)"><svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg></button>
+            <div class="mode-toggle">
+                <button id="audioModeBtn" onclick="setPlayerMode('audio')" class="mode-btn active">Bài hát</button>
+                <button id="videoModeBtn" onclick="setPlayerMode('video')" class="mode-btn">Video</button>
+            </div>
+            <div class="flex items-center gap-2">
+                <select id="resolutionSelect" onchange="changeResolution(this.value)" class="resolution-select hidden" title="Độ phân giải video">
+                    <option value="auto">Auto</option>
+                    <option value="1080">1080p</option>
+                    <option value="720">720p</option>
+                    <option value="480">480p</option>
+                    <option value="360">360p</option>
+                    <option value="240">240p</option>
+                    <option value="144">144p</option>
+                </select>
+                <button id="smoothModeBtn" onclick="toggleSmoothMode()" class="hidden px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase bg-zinc-500/10 text-zinc-400" title="Tự hạ chất lượng khi mạng yếu">Mượt: OFF</button>
+                <div id="volControl" class="hidden">
+                    <svg width="12" height="12" fill="currentColor" viewBox="0 0 24 24" class="text-zinc-500"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+                    <input type="range" id="volSlider" min="0" max="1" step="0.05" value="0.5" oninput="setVolume(this.value)">
+                </div>
+                <button onclick="openDevicePicker()" class="p-2.5 bg-zinc-500/10 rounded-full text-zinc-500 active:text-red-600 transition-colors">
+                    <svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M21 3H3c-1.1 0-2 .9-2 2v3h2V5h18v14h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2c4.97 0 9 4.03 9 9h2c0-6.08-4.92-11-11-11z"/></svg>
+                </button>
+                <button onclick="openPlaylistPicker()" class="p-2.5 bg-zinc-500/10 rounded-full" style="color: var(--text)"><svg width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg></button>
+                <button onclick="addCurrentToQueue()" class="p-2.5 bg-zinc-500/10 rounded-full" style="color: var(--text)" title="Thêm vào hàng chờ">➕</button>
+            </div>
+        </div>
+        <div class="flex-grow flex flex-col items-center justify-center gap-6 overflow-hidden">
+            <div id="mediaDisplay" class="w-full flex justify-center items-center px-4 flex-col tap-surface gesture-hint">
+                <div class="relative group">
+                     <img id="fThumb" class="w-72 h-72 rounded-[40px] object-cover shadow-2xl border-2 border-white/5 transition-transform duration-700">
+                     <div id="musicViz" class="absolute bottom-6 left-0 right-0 flex justify-center gap-1.5 opacity-0 transition-opacity duration-500 pointer-events-none">
+                        <div class="viz-bar bg-white/90"></div><div class="viz-bar bg-white/90"></div><div class="viz-bar bg-white/90"></div>
+                        <div class="viz-bar bg-white/90"></div><div class="viz-bar bg-white/90"></div>
+                     </div>
+                </div>
+                <div id="videoContainer" class="hidden mt-4">
+                    <div class="video-stage">
+                        <video id="videoPlayer" playsinline></video>
+                        <button id="videoZoomBtn" class="video-zoom-btn" onclick="toggleVideoZoom(event)" title="Phóng to video" aria-label="Phóng to video">
+                            <svg id="videoZoomIcon" width="18" height="18" fill="currentColor" viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zm0-12V5h-3v2h3v3h2V5h-2z"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="text-center px-6 w-full">
+                <div class="marquee-container">
+                    <h2 id="fTitle" class="text-lg font-bold leading-tight tracking-tight marquee-text" style="color: var(--text)">...</h2>
+                </div>
+                <p id="streamStatus" class="text-red-600 text-[9px] font-black uppercase mt-2 tracking-widest opacity-80">Đang phát</p>
+            </div>
+        </div>
+        <div class="space-y-4 pb-10">
+            <div id="castRemote" class="hidden px-4">
+                <div class="cast-remote-bar">
+                    <div class="flex items-center gap-2">
+                        <svg width="14" height="14" fill="#ff0033" viewBox="0 0 24 24"><path d="M21 3H3c-1.1 0-2 .9-2 2v3h2V5h18v14h-7v2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM1 18v3h3c0-1.66-1.34-3-3-3zm0-4v2c2.76 0 5 2.24 5 5h2c0-3.87-3.13-7-7-7zm0-4v2c4.97 0 9 4.03 9 9h2c0-6.08-4.92-11-11-11z"/></svg>
+                        <span id="remoteDeviceName" class="text-[9px] font-black uppercase text-red-600 tracking-tighter">LOA ĐANG PHÁT</span>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <button onclick="castControl('stop')" class="bg-red-600 text-white px-3 py-1.5 rounded-lg text-[9px] font-black uppercase active:scale-95 transition-transform">DỪNG LOA</button>
+                        <button onclick="next()" class="bg-white/10 text-white px-3 py-1.5 rounded-lg text-[9px] font-black uppercase active:scale-95 transition-transform">TIẾP THEO</button>
+                    </div>
+                </div>
+            </div>
+            <div class="px-2">
+                <input type="range" id="fProg" value="0" class="w-full" oninput="seek(this.value)" onchange="seekEnd(this.value)">
+                <div class="flex justify-between text-[10px] font-black text-zinc-500 mt-2">
+                    <span id="curT">0:00</span><span id="totT">0:00</span>
+                </div>
+            </div>
+            <div class="player-tools px-2 grid gap-2">
+                <div class="glass-card p-2.5">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                        <div class="text-[10px] font-black uppercase text-red-600">Preset 1 chạm</div>
+                        <div class="flex items-center gap-2">
+                            <select id="presetGroupFilter" onchange="renderPresets()" class="bg-zinc-500/10 text-[9px] font-black p-1.5 rounded-lg outline-none" style="color: var(--text)">
+                                <option value="all">Tất cả nhóm</option>
+                            </select>
+                            <button onclick="saveCurrentPreset()" class="text-[9px] font-black text-zinc-500">Lưu preset</button>
+                        </div>
+                    </div>
+                    <div id="presetList" class="grid gap-1 max-h-28 overflow-y-auto no-scrollbar"></div>
+                </div>
+                <div class="glass-card p-2.5">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                        <div class="text-[10px] font-black uppercase text-red-600">Lịch sử gần đây</div>
+                        <div class="text-[9px] text-zinc-500">Mới nhất trên cùng</div>
+                        <button onclick="clearRecentHistory()" class="text-[9px] font-black text-zinc-500">Xóa</button>
+                    </div>
+                    <div id="recentHistoryList" class="grid gap-1 max-h-28 overflow-y-auto no-scrollbar"></div>
+                </div>
+                <div class="glass-card p-2.5">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                        <div class="text-[10px] font-black uppercase text-red-600">Hàng chờ</div>
+                        <div class="queue-tools flex items-center gap-1.5">
+                            <span class="text-[9px] text-zinc-500">Kéo-thả hoặc vuốt ← → để đổi thứ tự</span>
+                            <button onclick="scrollQueueTop()" class="queue-mini-btn" title="Lên đầu hàng chờ">↑ Đầu</button>
+                            <button onclick="scrollQueueBottom()" class="queue-mini-btn" title="Xuống cuối hàng chờ">↓ Cuối</button>
+                            <button onclick="clearQueue()" class="text-[9px] font-black text-zinc-500">Xóa</button>
+                        </div>
+                    </div>
+                    <div id="queueList" class="grid gap-1 max-h-28 overflow-y-auto no-scrollbar"></div>
+                </div>
+                <div class="glass-card p-2.5">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                        <div class="text-[10px] font-black uppercase text-red-600">Sleep Timer</div>
+                        <div id="sleepTimerStatus" class="text-[9px] font-bold text-zinc-500">Chưa bật hẹn tắt</div>
+                    </div>
+                    <div class="grid grid-cols-5 gap-1">
+                        <button onclick="setSleepTimer(15)" class="sleep-btn">15p</button>
+                        <button onclick="setSleepTimer(30)" class="sleep-btn">30p</button>
+                        <button onclick="setSleepTimer(60)" class="sleep-btn">60p</button>
+                        <button onclick="setSleepTimer(90)" class="sleep-btn">90p</button>
+                        <button onclick="setSleepTimerCustom()" class="sleep-btn">Tự nhập</button>
+                        <button onclick="cancelSleepTimer()" class="sleep-btn danger">Hủy</button>
+                    </div>
+                </div>
+            </div>
+            <div class="player-primary-controls sticky-player-controls flex justify-center items-center px-4 relative">
+                <button onclick="toggleShuffle()" id="shuffleBtn" class="text-zinc-500 p-2 absolute left-4 active:scale-90 transition-transform">
+                    <svg width="22" height="22" fill="currentColor" viewBox="0 0 24 24"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg>
+                </button>
+
+                <div class="flex items-center gap-8">
+                    <button onclick="prev()" class="p-2" style="color: var(--text)"><svg width="28" height="28" fill="currentColor" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg></button>
+                    <button onclick="togglePlay()" class="w-16 h-16 bg-white text-black rounded-full icon-center shadow-xl active:scale-90 transition-transform">
+                        <svg id="fPlayIcon" width="32" height="32" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                    </button>
+                    <button onclick="next()" class="p-2" style="color: var(--text)"><svg width="28" height="28" fill="currentColor" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>
+                </div>
+                <div class="absolute right-4">
+                    <button onclick="toggleRepeat()" id="repBtn" class="text-zinc-500 p-2"><svg width="22" height="22" fill="currentColor" viewBox="0 0 24 24"><path d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg></button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div id="devicePicker" class="hidden fixed inset-0 z-[120] bg-black/80 backdrop-blur-xl flex items-end">
+        <div class="w-full rounded-t-[32px] p-8 space-y-6 max-h-[80vh] overflow-y-auto border-t border-white/10 no-scrollbar" style="background: var(--modal-bg)">
+            <div class="flex justify-between items-center">
+                <h3 class="font-extrabold text-xl tracking-tight" style="color: var(--text)">Chọn Loa</h3>
+                <button onclick="closeDevicePicker()" class="p-2 bg-zinc-500/10 rounded-full text-zinc-500"><svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+            </div>
+            <div id="deviceItems" class="grid gap-3"></div>
+        </div>
+    </div>
+    <div id="plPicker" class="hidden fixed inset-0 z-[110] bg-black/70 backdrop-blur-md flex items-end">
+        <div class="w-full rounded-t-[32px] p-8 space-y-6 max-h-[75vh] overflow-y-auto border-t border-white/10 no-scrollbar" style="background: var(--modal-bg)">
+            <h3 class="font-extrabold text-xl tracking-tight" style="color: var(--text)">Playlist</h3>
+            <div id="pickerItems" class="grid gap-3"></div>
+            <button onclick="closePicker()" class="w-full py-4 rounded-2xl font-black text-xs uppercase" style="background: var(--modal-btn); color: var(--sub)">Đóng</button>
+        </div>
+    </div>
+
+    <div id="debugPanel" class="hidden fixed inset-0 z-[130] bg-black/80 backdrop-blur-xl p-3">
+        <div class="debug-shell w-full h-full rounded-2xl border border-white/10 overflow-hidden" style="background: var(--modal-bg)">
+            <div class="debug-head flex items-center justify-between p-3 border-b border-white/10 gap-2">
+                <div>
+                    <div class="text-sm font-black">System & Debug</div>
+                    <div class="text-[10px] text-zinc-500">v1.20.22</div>
+                </div>
+                <button onclick="closeDebugPanel()" class="px-3 py-2 rounded-lg bg-red-600 text-xs text-white font-black">Đóng</button>
+            </div>
+            <div class="debug-body p-3 space-y-3 overflow-auto h-[calc(100%-58px)]">
+                <div class="debug-card">
+                    <div class="debug-title">Provider / Model</div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <input id="providerInput" class="debug-input" placeholder="Provider" value="youtube">
+                        <input id="modelInput" class="debug-input" placeholder="Model" value="yt-dlp-default">
+                    </div>
+                    <div class="debug-actions">
+                        <button onclick="saveProviderModel()" class="debug-btn">Lưu</button>
+                        <button onclick="testProviderModel()" class="debug-btn primary">Test</button>
+                    </div>
+                </div>
+                <div class="debug-card">
+                    <div class="debug-title">Health Check</div>
+                    <div class="debug-actions">
+                        <button onclick="loadHealthDetail()" class="debug-btn primary">Kiểm tra</button>
+                        <button onclick="exportDebugBundle()" class="debug-btn">Export Debug Bundle</button>
+                    </div>
+                    <pre id="healthOut" class="debug-pre">Chưa kiểm tra</pre>
+                </div>
+                <div class="debug-card">
+                    <div class="debug-title">Test History</div>
+                    <button onclick="loadTestHistory()" class="debug-btn">Tải lịch sử test</button>
+                    <div id="testHistoryOut" class="debug-list"></div>
+                </div>
+                <div class="debug-card">
+                    <div class="debug-title">Recent Logs</div>
+                    <div class="debug-actions">
+                        <button onclick="loadRecentLogs()" class="debug-btn">Tải logs</button>
+                        <button onclick="clearRecentLogs()" class="debug-btn danger">Xóa logs</button>
+                        <button onclick="toggleWatchdogUI()" class="debug-btn">Watchdog</button>
+                        <button onclick="refreshStreamUI()" class="debug-btn">Refresh URL</button>
+                    </div>
+                    <div id="logsOut" class="debug-list"></div>
+                </div>
+                <pre id="debugOut" class="debug-pre"></pre>
+            </div>
+        </div>
+    </div>
+
+    <audio id="player" crossorigin="anonymous" playsinline preload="auto"></audio>
+
+    
+    <script src="static/app.js"></script>
+</body>
+</html>
