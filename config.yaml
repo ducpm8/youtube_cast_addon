@@ -1,0 +1,20 @@
+name: "YouTube Music Cinematic"
+description: "Trình phát nhạc YouTube cao cấp: Tự đề xuất, Infinite Scroll, Proxy Stream & Favorites"
+version: "1.20.22"
+slug: "youtube_cast_addon"
+arch:
+  - aarch64
+  - amd64
+  - armhf
+  - armv7
+init: false
+panel_icon: "mdi:music-box-multiple"
+panel_title: "YT Music"
+ingress: true
+ingress_port: 2232
+hassio_role: manager
+hassio_api: true
+homeassistant_api: true
+
+
+image: "ghcr.io/trankhanhduy2929-beep/youtube_cast_addon-{arch}"
