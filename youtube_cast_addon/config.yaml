@@ -1,5 +1,5 @@
-name: "YouTube Music Cinematic"
-description: "Trình phát nhạc YouTube cao cấp: Tự đề xuất, Infinite Scroll, Proxy Stream & Favorites"
+name: "YouTube Music Player"
+description: "Trình phát nhạc YouTube cao cấp"
 version: "1.20.23"
 slug: "youtube_cast_addon"
 arch:

@@ -68,7 +68,6 @@ jobs:
         with:
           args: |
             --${{ matrix.arch }}
-            --target youtube_cast_addon
+            --target /data/youtube_cast_addon
             --image "ghcr.io/${{ github.repository_owner }}/${{ steps.addon.outputs.slug }}-{arch}"
-            --docker-hub "ghcr.io/${{ github.repository_owner }}"
             --addon

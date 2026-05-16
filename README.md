@@ -8,7 +8,7 @@ In Home Assistant: **Settings → Add-ons → Add-on Store → ⋮ → Repositor
 https://github.com/ducpm8/youtube_cast_addon
 ```
 
-Then install **YouTube Music Cinematic** from the store.
+Then install **YouTube Music ** from the store.
 
 ## Addons
 
