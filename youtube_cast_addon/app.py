@@ -12,15 +12,49 @@ import random
 import shutil
 from datetime import datetime, timedelta, timezone
 
-# Cấu hình logging
-logging.basicConfig(level=logging.ERROR, stream=sys.stdout)
+# Cấu hình logging — include UTC offset so time zone is visible in every line.
+logging.basicConfig(
+    level=logging.ERROR,
+    stream=sys.stdout,
+    format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+    datefmt='%Y-%m-%dT%H:%M:%S%z',
+)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
 SUPERVISOR_TOKEN = os.getenv('SUPERVISOR_TOKEN', '')
 HA_URL = "http://supervisor/core/api"
-DATA_DIR = "/data" 
+DATA_DIR = "/data"
+
+# ── Timezone self-heal ────────────────────────────────────────────────────────
+# HA Supervisor normally injects TZ=<iana_zone> into addon containers.
+# If it doesn't (older Supervisor, custom install), timers fire in UTC and
+# timestamps in logs are wrong. Detect this and fix it at startup.
+def _ensure_timezone():
+    if os.environ.get('TZ'):
+        logger.info(f"TZ from env: {os.environ['TZ']}")
+        return
+    try:
+        r = requests.get(
+            f"{HA_URL}/config",
+            headers={"Authorization": f"Bearer {SUPERVISOR_TOKEN}",
+                     "Content-Type": "application/json"},
+            timeout=5,
+        )
+        if r.status_code == 200:
+            tz = r.json().get('time_zone')
+            if tz:
+                os.environ['TZ'] = tz
+                time.tzset()
+                logger.warning(f"TZ not in env; set from HA config: {tz}")
+                return
+    except Exception as e:
+        logger.error(f"TZ self-heal failed: {e}")
+    logger.warning("TZ unknown — defaulting to UTC; set homeassistant.time_zone in HA config")
+
+_ensure_timezone()
+# ───────────────────────────────────────────────────────────────────────────── 
 PLAYLIST_FILE = os.path.join(DATA_DIR, "playlists_v11.json")
 TIMERS_FILE = os.path.join(DATA_DIR, "timers_v11.json")
 QUEUE_FILE = os.path.join(DATA_DIR, "queue_v12013.json")
@@ -76,7 +110,7 @@ schedule_rules = load_json(SCHEDULE_RULES_FILE, [])
 state_lock = threading.RLock()
 last_ytdlp_error = None
 last_timer_run = None
-APP_VERSION = "1.20.23"
+APP_VERSION = "1.20.24"
 APP_START_TIME = time.time()
 watchdog_enabled = True
 
@@ -111,7 +145,9 @@ CAST_RETRY_MAX = 2
 CAST_RETRY_DELAY = 1.5
 
 def _now_iso():
-    return datetime.now().isoformat(timespec='seconds')
+    # astimezone() attaches the local tzinfo (respects TZ env) so the offset
+    # is always visible in stored timestamps, e.g. "2026-05-16T14:32:59+07:00".
+    return datetime.now().astimezone().isoformat(timespec='seconds')
 
 def _safe_int(v, default=0):
     try:
