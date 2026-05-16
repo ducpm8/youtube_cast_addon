@@ -8,8 +8,8 @@ on:
       - '.github/workflows/publish.yml'
   workflow_dispatch:
     inputs:
-      version_override:
-        description: 'Force build even if version unchanged'
+      force:
+        description: 'Force rebuild even if tag exists'
         type: boolean
         default: false
 
@@ -24,38 +24,53 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [amd64, aarch64, armhf, armv7]
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            build_from: ghcr.io/home-assistant/amd64-base-python:3.12-alpine3.19
+          - arch: aarch64
+            platform: linux/arm64
+            build_from: ghcr.io/home-assistant/aarch64-base-python:3.12-alpine3.19
+          - arch: armhf
+            platform: linux/arm/v6
+            build_from: ghcr.io/home-assistant/armhf-base-python:3.12-alpine3.19
+          - arch: armv7
+            platform: linux/arm/v7
+            build_from: ghcr.io/home-assistant/armv7-base-python:3.12-alpine3.19
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Read addon metadata
+      - name: Read addon version
         id: addon
         run: |
           version=$(grep '^version:' youtube_cast_addon/config.yaml | head -1 | awk '{print $2}' | tr -d '"')
-          slug=$(grep '^slug:'    youtube_cast_addon/config.yaml | head -1 | awk '{print $2}' | tr -d '"')
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "slug=$slug"       >> "$GITHUB_OUTPUT"
-          echo "Building $slug version $version for ${{ matrix.arch }}"
+          echo "Addon version: $version for ${{ matrix.arch }}"
 
-      - name: Check if image already published
+      - name: Check if tag already exists
         id: existing
         run: |
+          image="ghcr.io/${{ github.repository_owner }}/youtube_cast_addon-${{ matrix.arch }}"
           tag="${{ steps.addon.outputs.version }}"
-          image="ghcr.io/${{ github.repository_owner }}/${{ steps.addon.outputs.slug }}-${{ matrix.arch }}"
           if docker manifest inspect "$image:$tag" >/dev/null 2>&1; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Already published: $image:$tag"
+            echo "skip=true"  >> "$GITHUB_OUTPUT"
+            echo "Already published: $image:$tag — skipping"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set up QEMU
-        if: steps.existing.outputs.skip == 'false' || inputs.version_override == true
+        if: steps.existing.outputs.skip == 'false' || inputs.force == true
         uses: docker/setup-qemu-action@v3
 
+      - name: Set up Docker Buildx
+        if: steps.existing.outputs.skip == 'false' || inputs.force == true
+        uses: docker/setup-buildx-action@v3
+
       - name: Login to GHCR
-        if: steps.existing.outputs.skip == 'false' || inputs.version_override == true
+        if: steps.existing.outputs.skip == 'false' || inputs.force == true
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -63,11 +78,18 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push ${{ matrix.arch }}
-        if: steps.existing.outputs.skip == 'false' || inputs.version_override == true
-        uses: home-assistant/builder@2024.08.2
+        if: steps.existing.outputs.skip == 'false' || inputs.force == true
+        uses: docker/build-push-action@v6
         with:
-          args: |
-            --${{ matrix.arch }}
-            --target /data/youtube_cast_addon
-            --image "ghcr.io/${{ github.repository_owner }}/${{ steps.addon.outputs.slug }}-{arch}"
-            --addon
+          context: youtube_cast_addon
+          platforms: ${{ matrix.platform }}
+          push: true
+          build-args: |
+            BUILD_FROM=${{ matrix.build_from }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/youtube_cast_addon-${{ matrix.arch }}:${{ steps.addon.outputs.version }}
+            ghcr.io/${{ github.repository_owner }}/youtube_cast_addon-${{ matrix.arch }}:latest
+          labels: |
+            org.opencontainers.image.title=YouTube Music Player (${{ matrix.arch }})
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.addon.outputs.version }}
