@@ -1,6 +1,6 @@
 name: "YouTube Music Cinematic"
 description: "Trình phát nhạc YouTube cao cấp: Tự đề xuất, Infinite Scroll, Proxy Stream & Favorites"
-version: "1.20.22"
+version: "1.20.23"
 slug: "youtube_cast_addon"
 arch:
   - aarch64

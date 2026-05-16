@@ -41,20 +41,22 @@ def load_json(path, default):
         except: return default
     return default
 
-def save_json(path, data):
-    # Atomic save + backup .bak to reduce corruption risk
+def save_json(path, data, skip_backup=False, skip_fsync=False):
+    # Atomic save via rename. Optional .bak + fsync (default on for user data,
+    # both disabled for high-frequency hot files like logs to spare SD card.)
     tmp_path = path + '.tmp'
     bak_path = path + '.bak'
     try:
-        if os.path.exists(path):
+        if not skip_backup and os.path.exists(path):
             try:
                 shutil.copy2(path, bak_path)
             except Exception:
                 pass
         with open(tmp_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False)
-            f.flush()
-            os.fsync(f.fileno())
+            if not skip_fsync:
+                f.flush()
+                os.fsync(f.fileno())
         os.replace(tmp_path, path)
     except Exception as e:
         logger.error(f"save_json error for {path}: {e}")
@@ -74,9 +76,31 @@ schedule_rules = load_json(SCHEDULE_RULES_FILE, [])
 state_lock = threading.RLock()
 last_ytdlp_error = None
 last_timer_run = None
-APP_VERSION = "1.20.17"
+APP_VERSION = "1.20.23"
 APP_START_TIME = time.time()
 watchdog_enabled = True
+
+# Shared HTTP session — keep-alive cuts TCP/TLS handshake on every HA call.
+HA_SESSION = requests.Session()
+
+# Serialize yt-dlp invocations to avoid concurrent extract memory spikes (~50-100MB each)
+# that OOM-kill the addon on low-RAM HA hosts (Pi 3 / 1GB class).
+YT_DLP_LOCK = threading.Lock()
+
+# TTL cache for resolve_youtube_stream — googlevideo URLs live ~6h; cache 4h
+# to avoid re-extracting on every repeat play.
+STREAM_CACHE = {}
+STREAM_CACHE_LOCK = threading.Lock()
+STREAM_CACHE_TTL = 4 * 3600
+STREAM_CACHE_MAX = 256
+
+# In-memory log ring buffer. File flushed only on read or every LOG_FLUSH_INTERVAL
+# seconds — drastically reduces SD-card write amplification from add_log calls.
+LOG_BUFFER = []
+LOG_BUFFER_LOCK = threading.Lock()
+LOG_BUFFER_MAX = 300
+LOG_FLUSH_INTERVAL = 60
+_last_log_flush = time.time()
 
 # --- v1.20.12 Debug/Test/Health helpers ---
 LOG_FILE = os.path.join(DATA_DIR, "logs_v12011.json")
@@ -176,14 +200,50 @@ def mask_obj(obj):
         return [mask_obj(x) for x in obj]
     return obj
 
+def _flush_log_buffer(force=False):
+    """Flush in-memory log buffer to disk. Called periodically or on read.
+    Skips backup + fsync — log corruption is acceptable, SD wear is not."""
+    global _last_log_flush
+    now = time.time()
+    if not force and (now - _last_log_flush) < LOG_FLUSH_INTERVAL:
+        return
+    with LOG_BUFFER_LOCK:
+        if not LOG_BUFFER:
+            _last_log_flush = now
+            return
+        rows = list(LOG_BUFFER)
+    try:
+        save_json(LOG_FILE, rows, skip_backup=True, skip_fsync=True)
+        _last_log_flush = now
+    except Exception as e:
+        logger.error(f"log flush error: {e}")
+
+
+def _read_logs():
+    """Merge file-persisted logs with in-memory buffer for read endpoints."""
+    with LOG_BUFFER_LOCK:
+        return list(LOG_BUFFER)
+
+
 def add_log(level, message, meta=None):
     try:
-        rows = load_json(LOG_FILE, [])
-        rows.append({"time": _now_iso(), "level": level, "message": message, "meta": mask_obj(meta or {})})
-        rows = rows[-300:]
-        save_json(LOG_FILE, rows)
+        entry = {"time": _now_iso(), "level": level, "message": message, "meta": mask_obj(meta or {})}
+        with LOG_BUFFER_LOCK:
+            LOG_BUFFER.append(entry)
+            if len(LOG_BUFFER) > LOG_BUFFER_MAX:
+                del LOG_BUFFER[:len(LOG_BUFFER) - LOG_BUFFER_MAX]
+        _flush_log_buffer()
     except Exception as e:
         logger.error(f"add_log error: {e}")
+
+
+# Hydrate log buffer from disk on boot so history survives restart.
+try:
+    _persisted_logs = load_json(LOG_FILE, [])
+    if isinstance(_persisted_logs, list):
+        LOG_BUFFER.extend(_persisted_logs[-LOG_BUFFER_MAX:])
+except Exception:
+    pass
 
 def get_settings():
     defaults = {"provider": "youtube", "model": "yt-dlp-default"}
@@ -212,7 +272,7 @@ def call_ha_service(domain, service, payload, timeout=10, retries=CAST_RETRY_MAX
     last_error = None
     for attempt in range(retries + 1):
         try:
-            r = requests.post(url, headers=ha_headers(), json=payload, timeout=timeout)
+            r = HA_SESSION.post(url, headers=ha_headers(), json=payload, timeout=timeout)
             if 200 <= r.status_code < 300:
                 if attempt > 0:
                     add_log('warn', 'HA service recovered after retry', {"service": service, "attempt": attempt + 1})
@@ -234,13 +294,12 @@ def run_self_check():
     except Exception as e:
         checks['data_dir_writable'] = {"ok": False, "error": str(e)}
     try:
-        import subprocess
-        r = subprocess.run(['yt-dlp', '--version'], text=True, capture_output=True, timeout=5)
-        checks['yt_dlp'] = {"ok": r.returncode == 0, "version": (r.stdout or r.stderr).strip()}
+        ver = getattr(yt_dlp.version, '__version__', None) or 'unknown'
+        checks['yt_dlp'] = {"ok": True, "version": ver}
     except Exception as e:
         checks['yt_dlp'] = {"ok": False, "error": str(e)}
     try:
-        r = requests.get(f"{HA_URL}/states", headers=ha_headers(), timeout=5)
+        r = HA_SESSION.get(f"{HA_URL}/states", headers=ha_headers(), timeout=5)
         ents = r.json() if r.status_code == 200 else []
         mp = [e for e in ents if str(e.get('entity_id', '')).startswith('media_player.')] if isinstance(ents, list) else []
         checks['home_assistant'] = {"ok": r.status_code == 200, "status": r.status_code, "media_players": len(mp)}
@@ -339,37 +398,35 @@ def execute_timer_task(task):
             else:
                 song = playlists[pl_name][0]
                 
-            # Timer chạy cho Loa -> dùng m4a
-            ydl_opts = {'format': 'bestaudio[ext=m4a]/bestaudio', 'quiet': True}
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(song['url'], download=False)
-                
-                with state_lock:
-                    active_session.update({
-                    "entity_id": eid,
-                    "url": info['url'],
-                    "source_url": song.get('url'),
-                    "title": song.get('title'),
-                    "thumbnail": song.get('thumbnail'),
-                    "mode": "audio",
-                    "resolution": "auto",
-                    "should_be_playing": True,
-                    "last_position": 0,
-                    "retry_count": 0,
-                    "last_retry_at": 0,
-                    "last_error": None
-                    })
+            # Timer chạy cho Loa -> dùng cached resolver (cuts repeat extracts).
+            info = resolve_youtube_stream(song['url'], 'audio', eid, 'auto')
 
-                last_timer_run = {"time": datetime.now().isoformat(timespec='seconds'), "task_id": task.get('id'), "type": task.get('type'), "entity_id": eid}
-                call_ha_service("media_player", "play_media", {
-                    "entity_id": eid, 
-                    "media_content_id": info['url'], 
-                    "media_content_type": "audio/mp4",
-                    "extra": {
-                        "title": song.get('title'),
-                        "thumb": song.get('thumbnail')
-                    }
-                }, timeout=10)
+            with state_lock:
+                active_session.update({
+                "entity_id": eid,
+                "url": info['url'],
+                "source_url": song.get('url'),
+                "title": song.get('title'),
+                "thumbnail": song.get('thumbnail'),
+                "mode": "audio",
+                "resolution": "auto",
+                "should_be_playing": True,
+                "last_position": 0,
+                "retry_count": 0,
+                "last_retry_at": 0,
+                "last_error": None
+                })
+
+            last_timer_run = {"time": datetime.now().isoformat(timespec='seconds'), "task_id": task.get('id'), "type": task.get('type'), "entity_id": eid}
+            call_ha_service("media_player", "play_media", {
+                "entity_id": eid,
+                "media_content_id": info['url'],
+                "media_content_type": "audio/mp4",
+                "extra": {
+                    "title": song.get('title'),
+                    "thumb": song.get('thumbnail')
+                }
+            }, timeout=10)
 
             duration = task.get('duration')
             try:
@@ -426,6 +483,7 @@ threading.Thread(target=schedule_worker, daemon=True).start()
 def sleep_timer_worker():
     global sleep_timer
     while True:
+        sleep_for = 60  # default when no active timer
         try:
             with state_lock:
                 st = dict(sleep_timer) if isinstance(sleep_timer, dict) else {}
@@ -446,10 +504,15 @@ def sleep_timer_worker():
                         sleep_timer = {"enabled": False, "end_at": None, "entity_id": eid, "minutes": st.get('minutes', 0), "last_triggered_at": _now_iso()}
                         save_json(SLEEP_TIMER_FILE, sleep_timer)
                     add_log('timer', 'Sleep timer stopped playback', {"entity_id": eid})
-            time.sleep(5)
+                    sleep_for = 60
+                else:
+                    # Sleep until shortly before deadline; clamp [2, 60]s.
+                    remaining = max(2.0, end_ts - time.time())
+                    sleep_for = min(60.0, remaining)
         except Exception as e:
             add_log('error', 'Sleep timer worker error', {"error": str(e)})
-            time.sleep(10)
+            sleep_for = 10
+        time.sleep(sleep_for)
 
 threading.Thread(target=sleep_timer_worker, daemon=True).start()
 
@@ -459,13 +522,18 @@ def watchdog_worker():
     while True:
         try:
             if not watchdog_enabled:
-                time.sleep(2)
+                time.sleep(30)
                 continue
             with state_lock:
                 session = dict(active_session)
+            # When nothing should be playing, sleep long. Cuts idle HA polls
+            # from 17,280/day → ~2,880/day on weak hosts.
+            if not (session.get('should_be_playing') and session.get('entity_id')):
+                time.sleep(30)
+                continue
             if session.get('should_be_playing') and session.get('entity_id'):
                 eid = session.get('entity_id')
-                r = requests.get(f"{HA_URL}/states/{eid}", headers=headers, timeout=5)
+                r = HA_SESSION.get(f"{HA_URL}/states/{eid}", headers=headers, timeout=5)
                 if r.status_code == 200:
                     data = r.json()
                     state = data.get('state')
@@ -514,7 +582,7 @@ def watchdog_worker():
                             if still_should_play:
                                 logger.warning(f"Watchdog: Detected interruption on {eid}. Resuming...")
                                 content_type = "video/mp4" if session.get('mode') == 'video' else "audio/mp4"
-                                requests.post(f"{HA_URL}/services/media_player/play_media", headers=headers, json={
+                                HA_SESSION.post(f"{HA_URL}/services/media_player/play_media", headers=headers, json={
                                     "entity_id": eid,
                                     "media_content_id": stream_url,
                                     "media_content_type": content_type,
@@ -524,9 +592,9 @@ def watchdog_worker():
                                     }
                                 }, timeout=10)
                                 if session.get('last_position', 0) > 5:
-                                    time.sleep(2) 
-                                    requests.post(f"{HA_URL}/services/media_player/media_seek", headers=headers, json={
-                                        "entity_id": eid, 
+                                    time.sleep(2)
+                                    HA_SESSION.post(f"{HA_URL}/services/media_player/media_seek", headers=headers, json={
+                                        "entity_id": eid,
                                         "seek_position": session.get('last_position', 0)
                                     }, timeout=5)
         except Exception as e: pass
@@ -535,9 +603,40 @@ def watchdog_worker():
 threading.Thread(target=watchdog_worker, daemon=True).start()
 threading.Thread(target=self_check_worker, daemon=True).start()
 
+def _stream_cache_get(key):
+    with STREAM_CACHE_LOCK:
+        entry = STREAM_CACHE.get(key)
+        if not entry:
+            return None
+        expires_at, info = entry
+        if time.time() >= expires_at:
+            STREAM_CACHE.pop(key, None)
+            return None
+        return info
+
+
+def _stream_cache_put(key, info):
+    with STREAM_CACHE_LOCK:
+        if len(STREAM_CACHE) >= STREAM_CACHE_MAX:
+            # Evict oldest by expiry
+            try:
+                oldest = min(STREAM_CACHE.items(), key=lambda kv: kv[1][0])[0]
+                STREAM_CACHE.pop(oldest, None)
+            except ValueError:
+                STREAM_CACHE.clear()
+        STREAM_CACHE[key] = (time.time() + STREAM_CACHE_TTL, info)
+
+
 def resolve_youtube_stream(source_url, mode='audio', target='browser', resolution='auto'):
-    """Resolve a fresh playable stream URL from the original YouTube URL."""
+    """Resolve a fresh playable stream URL from the original YouTube URL.
+    Cached for STREAM_CACHE_TTL; YT_DLP_LOCK prevents concurrent extracts
+    (memory spike protection on low-RAM HA hosts)."""
     global last_ytdlp_error
+    cache_key = (source_url, mode, target, str(resolution))
+    cached = _stream_cache_get(cache_key)
+    if cached:
+        return cached
+
     if mode == 'video':
         try:
             h = int(resolution) if str(resolution).isdigit() else None
@@ -567,18 +666,24 @@ def resolve_youtube_stream(source_url, mode='audio', target='browser', resolutio
             fmt_candidates = ['bestaudio[ext=m4a]', 'bestaudio']
 
     last_err = None
-    for fmt in fmt_candidates:
-        ydl_opts = {'format': fmt, 'quiet': True, 'noplaylist': True}
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(source_url, download=False)
-                last_ytdlp_error = None
-                if info and info.get('url'):
-                    return info
-        except Exception as e:
-            last_err = str(e)
-            logger.error(f"yt-dlp resolve error ({fmt}): {e}")
-            continue
+    with YT_DLP_LOCK:
+        # Re-check cache after acquiring lock — another thread may have populated it.
+        cached = _stream_cache_get(cache_key)
+        if cached:
+            return cached
+        for fmt in fmt_candidates:
+            ydl_opts = {'format': fmt, 'quiet': True, 'noplaylist': True}
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(source_url, download=False)
+                    last_ytdlp_error = None
+                    if info and info.get('url'):
+                        _stream_cache_put(cache_key, info)
+                        return info
+            except Exception as e:
+                last_err = str(e)
+                logger.error(f"yt-dlp resolve error ({fmt}): {e}")
+                continue
     last_ytdlp_error = last_err or 'Unable to resolve stream'
     raise RuntimeError(last_ytdlp_error)
 
@@ -587,12 +692,13 @@ def search_youtube(query, offset=1, limit=16):
     ydl_opts = {'quiet': True, 'extract_flat': True, 'skip_download': True, 'playlist_items': f'{offset}-{offset+limit-1}', 'ignoreerrors': True}
     res = []
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            q = query if query and query.strip() != "" else "nhạc trẻ remix 2025"
-            info = ydl.extract_info(f"ytsearch{offset+limit}:{q}", download=False)
-            if 'entries' in info:
-                for e in info['entries']:
-                    if e: res.append({"title": e.get('title', '...'), "url": f"https://www.youtube.com/watch?v={e.get('id')}", "thumbnail": f"https://img.youtube.com/vi/{e.get('id')}/mqdefault.jpg", "id": e.get('id')})
+        with YT_DLP_LOCK:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                q = query if query and query.strip() != "" else "nhạc trẻ remix 2025"
+                info = ydl.extract_info(f"ytsearch{offset+limit}:{q}", download=False)
+                if 'entries' in info:
+                    for e in info['entries']:
+                        if e: res.append({"title": e.get('title', '...'), "url": f"https://www.youtube.com/watch?v={e.get('id')}", "thumbnail": f"https://img.youtube.com/vi/{e.get('id')}/mqdefault.jpg", "id": e.get('id')})
     except: pass
     return res
 
@@ -618,18 +724,23 @@ def proxy_stream():
 
 @app.route('/api/entities')
 def entities():
-    headers = {"Authorization": f"Bearer {SUPERVISOR_TOKEN}", "Content-Type": "application/json"}
     try:
-        r = requests.get(f"{HA_URL}/states", headers=headers, timeout=5)
-        return jsonify(r.json() if r.status_code == 200 else [])
+        r = HA_SESSION.get(f"{HA_URL}/states", headers=ha_headers(), timeout=5)
+        if r.status_code != 200:
+            return jsonify([])
+        ents = r.json()
+        if not isinstance(ents, list):
+            return jsonify([])
+        # Frontend only consumes media_player.*; filter server-side to cut
+        # JSON parse cost on the (weak) HA host's browser AND save bandwidth.
+        return jsonify([e for e in ents if str(e.get('entity_id', '')).startswith('media_player.')])
     except: return jsonify([])
 
 @app.route('/api/speaker_state')
 def speaker_state():
     eid = request.args.get('entity_id')
-    headers = {"Authorization": f"Bearer {SUPERVISOR_TOKEN}", "Content-Type": "application/json"}
     try:
-        r = requests.get(f"{HA_URL}/states/{eid}", headers=headers, timeout=5)
+        r = HA_SESSION.get(f"{HA_URL}/states/{eid}", headers=ha_headers(), timeout=5)
         if r.status_code == 200:
             data = r.json()
             attr = data.get('attributes', {})
@@ -1334,22 +1445,23 @@ def test_history_api():
 @app.route('/api/logs', methods=['GET', 'DELETE'])
 def logs_api():
     if request.method == 'DELETE':
-        save_json(LOG_FILE, [])
+        with LOG_BUFFER_LOCK:
+            LOG_BUFFER.clear()
+        save_json(LOG_FILE, [], skip_backup=True, skip_fsync=True)
         return jsonify({"success": True})
-    return jsonify(load_json(LOG_FILE, [])[-300:])
+    _flush_log_buffer(force=True)
+    return jsonify(_read_logs()[-300:])
 
 @app.route('/api/health_detail')
 def health_detail_api():
-    headers = {"Authorization": f"Bearer {SUPERVISOR_TOKEN}", "Content-Type": "application/json"}
     checks = {}
     try:
-        import subprocess
-        r = subprocess.run(['yt-dlp', '--version'], text=True, capture_output=True, timeout=5)
-        checks['yt_dlp'] = {"ok": r.returncode == 0, "version": (r.stdout or r.stderr).strip()}
+        ver = getattr(yt_dlp.version, '__version__', None) or 'unknown'
+        checks['yt_dlp'] = {"ok": True, "version": ver}
     except Exception as e:
         checks['yt_dlp'] = {"ok": False, "error": str(e)}
     try:
-        r = requests.get(f"{HA_URL}/states", headers=headers, timeout=5)
+        r = HA_SESSION.get(f"{HA_URL}/states", headers=ha_headers(), timeout=5)
         ents = r.json() if r.status_code == 200 else []
         mp = [e for e in ents if str(e.get('entity_id', '')).startswith('media_player.')] if isinstance(ents, list) else []
         checks['home_assistant'] = {"ok": r.status_code == 200, "status": r.status_code, "media_players": len(mp)}
@@ -1366,7 +1478,7 @@ def health_detail_api():
         "data": {
             "playlists": pc,
             "timers": tc,
-            "logs": len(load_json(LOG_FILE, [])),
+            "logs": len(_read_logs()),
             "tests": len(load_json(TEST_HISTORY_FILE, []))
         },
         "active_session": mask_obj(sess),
@@ -1384,7 +1496,7 @@ def debug_bundle_api():
             "playlists": playlists,
             "timers": timers,
             "active_session": dict(active_session),
-            "logs": load_json(LOG_FILE, [])[-300:],
+            "logs": _read_logs()[-300:],
             "test_history": load_json(TEST_HISTORY_FILE, [])[-100:],
             "environment": {
                 "SUPERVISOR_TOKEN": mask_secret_value(SUPERVISOR_TOKEN),
@@ -1392,6 +1504,9 @@ def debug_bundle_api():
             }
         }
     return jsonify(mask_obj(bundle))
+
+import atexit
+atexit.register(lambda: _flush_log_buffer(force=True))
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=2232)
